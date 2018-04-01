@@ -34,7 +34,7 @@ class VpcManager:
 
     async def connect_vpc_to_main(self, *, vpcid):
         vpcconnect = self.cleint_ec2.create_vpc_peering_connection(DryRun=False, VpcId=vpcid, PeerVpcId=self.VpcId)
-        connID = vpcconnect["VpcPeeringConnection"]["AccepterVpcInfo"]["VpcId"]
+        connID = vpcconnect["VpcPeeringConnection"]["VpcPeeringConnectionId"]
         print(f"New VPC Connection is crated: {connID}")
 
     async def create_security_group(self, vpcid):
