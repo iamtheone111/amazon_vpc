@@ -14,33 +14,49 @@ class VpcManager:
                                  aws_access_key_id=aws_access_key_id,
                                  aws_secret_access_key = aws_secret_access_key
                                  )
+        self.VpcId = None
 
     async def connect(self):
         try:
-            self.ec2 = boto3.resource('ec2', **self.connect_param)
+            self.cleint_ec2 = boto3.client('ec2', **self.connect_param)
+            self.resource_ec2 = boto3.resource('ec2', **self.connect_param)
         except Exception as err:
             raise ErrCantConnect(err)
 
     async def create_vpc(self, *, network):
-        self.client_vpc = self.ec2.create_vpc(CidrBlock=network)
-        print(self.client_vpc)
-        self.subnet = self.client_vpc.create_subnet(CidrBlock=network)
-        print(self.subnet)
-        self.client_vpc.wait_until_available()
+        client_vpc = self.cleint_ec2.create_vpc(CidrBlock=network)
+        self.VpcId = client_vpc['Vpc']['VpcId']
+        print(f"New VPC is created: {self.VpcId}")
 
-        self.gateway = self.ec2.create_internet_gateway()
-        print(self.gateway)
-        self.gateway.attach_to_vpc(VpcId = self.client_vpc.id)
+        # From task I am not get nned to create subnets or not...
+        #self.subnet = self.ec2.create_subnet(CidrBlock=network, VpcId=self.VpcId)
+        #self.gateway.attach_to_vpc(VpcId = self.client_vpc.id)
 
     async def connect_vpc_to_main(self, *, vpcid):
-        self.ec2.create_vpc_peering_connection(DryRun=False, VpcId=vpcid, PeerVpcId=self.client_vpc.id)
+        vpcconnect = self.cleint_ec2.create_vpc_peering_connection(DryRun=False, VpcId=vpcid, PeerVpcId=self.VpcId)
+        connID = vpcconnect["VpcPeeringConnection"]["AccepterVpcInfo"]["VpcId"]
+        print(f"New VPC Connection is crated: {connID}")
 
-    async def modify_security_group(self):
-        groups = self.ec2.describe_security_groups()
-        for item in groups:
-            print(item)
+    async def create_security_group(self, vpcid):
+        #Try to do isolation by group id.
+        #main_desc_group = self.cleint_ec2.describe_security_groups(Filters=[{'Name': 'vpc-id', 'Values': [vpcid]}])
+        #mainGroupId = main_desc_group['SecurityGroups'][0]['GroupId']
+
+        mainVpc = self.resource_ec2.Vpc(vpcid)
+
+        new_desc_group = self.cleint_ec2.describe_security_groups(Filters=[{'Name':'vpc-id','Values': [self.VpcId]}])
+        newGroupId = new_desc_group['SecurityGroups'][0]['GroupId']
+        ec2SecurityGroup = self.resource_ec2.SecurityGroup(newGroupId)
+        ec2SecurityGroup.revoke_egress(IpPermissions=[{"IpRanges":[{"CidrIp":"0.0.0.0/0"}],
+                                                       "IpProtocol":"-1"}])
+        ec2SecurityGroup.authorize_egress(IpPermissions=[{"IpRanges":[{"CidrIp":mainVpc.cidr_block}],
+                                                       "IpProtocol":"-1"}])
 
 
+        # :( but it didnt work error "You have specified two resources that belong to different networks."
+        # so to do that i using CidrIp
+        #ec2SecurityGroup.authorize_egress(IpPermissions=[{"UserIdGroupPairs":[{"GroupId":mainGroupId}],
+        #                                               "IpProtocol":"-1"}])
 
 
 
@@ -62,8 +78,8 @@ if __name__ == "__main__":
                             aws_secret_access_key=args.aws_secret_access_key)
     loop.run_until_complete(vpcManager.connect())
     loop.run_until_complete(vpcManager.create_vpc(network=args.client_network))
-    #loop.run_until_complete(vpcManager.connect_vpc_to_main(vpcid=args.main_vpc_id))
-    loop.run_until_complete(vpcManager.modify_security_group())
+    loop.run_until_complete(vpcManager.connect_vpc_to_main(vpcid=args.main_vpc_id))
+    loop.run_until_complete(vpcManager.create_security_group(vpcid=args.main_vpc_id))
     loop.close()
 
 
