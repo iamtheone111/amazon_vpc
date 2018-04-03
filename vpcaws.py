@@ -28,19 +28,46 @@ class VpcManager:
         self.VpcId = client_vpc['Vpc']['VpcId']
         print(f"New VPC is created: {self.VpcId}")
 
-        # From task I am not get nned to create subnets or not...
         #self.subnet = self.ec2.create_subnet(CidrBlock=network, VpcId=self.VpcId)
         #self.gateway.attach_to_vpc(VpcId = self.client_vpc.id)
 
     async def connect_vpc_to_main(self, *, vpcid):
-        vpcconnect = self.cleint_ec2.create_vpc_peering_connection(DryRun=False, VpcId=vpcid, PeerVpcId=self.VpcId)
-        connID = vpcconnect["VpcPeeringConnection"]["VpcPeeringConnectionId"]
-        print(f"New VPC Connection is crated: {connID}")
+        vpcconnect = (self.cleint_ec2
+                          .create_vpc_peering_connection(DryRun=False,
+                                                         VpcId=vpcid,
+                                                         PeerVpcId=self.VpcId))
+        self.ConnID = vpcconnect["VpcPeeringConnection"]["VpcPeeringConnectionId"]
+        print(f"New VPC Connection is crated: {self.ConnID}")
+        vpc_peering_connection = self.resource_ec2.VpcPeeringConnection(self.ConnID)
+        vpc_peering_connection.accept(DryRun=False)
+        print(f"VPC Connection is accepted: {self.ConnID}")
 
-    async def create_security_group(self, vpcid):
-        #Try to do isolation by group id.
-        #main_desc_group = self.cleint_ec2.describe_security_groups(Filters=[{'Name': 'vpc-id', 'Values': [vpcid]}])
-        #mainGroupId = main_desc_group['SecurityGroups'][0]['GroupId']
+
+
+    async def modify_route_table(self, *, vpcid, network ):
+        mainVpc = self.resource_ec2.Vpc(vpcid)
+        # Edit route table for new VPC
+        route_table_info = (self.cleint_ec2
+                                .describe_route_tables(DryRun=False,
+                                                       Filters=[{'Name':'vpc-id',
+                                                                 'Values':[self.VpcId]}]))
+        route_table_id = route_table_info["RouteTables"][0]['RouteTableId']
+        route_table_res = self.resource_ec2.RouteTable(route_table_id)
+        route_table_res.create_route(DestinationCidrBlock=mainVpc.cidr_block,
+                                     VpcPeeringConnectionId=self.ConnID)
+
+        # Edit route table for Main VPC
+        route_table_info = (self.cleint_ec2
+                                .describe_route_tables(DryRun=False,
+                                                       Filters=[{'Name':'vpc-id',
+                                                                 'Values':[vpcid]}]))
+        route_table_id = route_table_info["RouteTables"][0]['RouteTableId']
+        route_table_res = self.resource_ec2.RouteTable(route_table_id)
+        route_table_res.create_route(DestinationCidrBlock=network,
+                                     VpcPeeringConnectionId=self.ConnID)
+
+
+    async def modify_security_group(self, vpcid):
 
         mainVpc = self.resource_ec2.Vpc(vpcid)
 
@@ -53,7 +80,10 @@ class VpcManager:
                                                        "IpProtocol":"-1"}])
 
 
-        # :( but it didnt work error "You have specified two resources that belong to different networks."
+        #Try to do isolation by group id.
+        #main_desc_group = self.cleint_ec2.describe_security_groups(Filters=[{'Name': 'vpc-id', 'Values': [vpcid]}])
+        #mainGroupId = main_desc_group['SecurityGroups'][0]['GroupId']
+        # but it didnt work error "You have specified two resources that belong to different networks."
         # so to do that i using CidrIp
         #ec2SecurityGroup.authorize_egress(IpPermissions=[{"UserIdGroupPairs":[{"GroupId":mainGroupId}],
         #                                               "IpProtocol":"-1"}])
@@ -70,6 +100,8 @@ if __name__ == "__main__":
     parser.add_argument("--aws_access_key_id", help="AWS access key Id", required=True)
     parser.add_argument("--aws_secret_access_key", help="AWS secret access key", required=True)
 
+    parser.add_argument('--no_modify_route_table', action='store_true', help="Modify route table")
+    parser.add_argument('--no_modify_security_group', action='store_true',help="Modify security group")
 
     args = parser.parse_args()
 
@@ -79,7 +111,11 @@ if __name__ == "__main__":
     loop.run_until_complete(vpcManager.connect())
     loop.run_until_complete(vpcManager.create_vpc(network=args.client_network))
     loop.run_until_complete(vpcManager.connect_vpc_to_main(vpcid=args.main_vpc_id))
-    loop.run_until_complete(vpcManager.create_security_group(vpcid=args.main_vpc_id))
+    if not args.no_modify_route_table:
+        loop.run_until_complete(vpcManager.modify_route_table(vpcid=args.main_vpc_id,
+                                                              network=args.client_network))
+    if not args.no_modify_security_group:
+        loop.run_until_complete(vpcManager.modify_security_group(vpcid=args.main_vpc_id))
     loop.close()
 
 
